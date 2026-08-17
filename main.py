@@ -1,4 +1,5 @@
 
+
 # Directory structure for the project
 # credit_card_scraper/
 # ├── main.py
@@ -98,5 +99,3 @@ flask
 # Credit Card Scraper
 
 This is a Python script to scrape credit card and bank account information from various websites using Scrapy, Selenium, and Flask.
-
-
