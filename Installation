@@ -3,7 +3,8 @@
 # credit_card_scraper/
 # ├── main.py
 # ├── requirements.txt
-# └── README.md
+# ├── README.md
+# └── venv/
 
 # main.py
 import scrapy
@@ -207,7 +208,7 @@ joblib
 # README.md
 # Credit Card Scraper
 
-This is a Python scriptn to scrape credit card and bank account information from various websites using Scrapy, Selenium, and Flask.
+This is a Python script to scrape credit card and bank account information from various websites using Scrapy, Selenium, and Flask.
 
 ## Installation
 
@@ -217,13 +218,22 @@ This is a Python scriptn to scrape credit card and bank account information from
    cd credit_card_scraper
    ```
 
-2. Create a virtual environment (optional but recommended):
+2. Create a virtual environment:
    ```bash
    python3 -m venv venv
-   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
    ```
 
-3. Install the required packages:
+3. Activate the virtual environment:
+   - On Unix or MacOS:
+     ```bash
+     source venv/bin/activate
+     ```
+   - On Windows:
+     ```bash
+     venv\Scripts\activate
+     ```
+
+4. Install the required packages:
    ```bash
    pip install -r requirements.txt
    ```
@@ -240,12 +250,4 @@ Send a POST request to the `/scrape` endpoint with a JSON payload containing the
 curl -X POST http://127.0.0.1:5000/scrape -H "Content-Type: application/json" -d '{"urls": ["https://www.examplebank.com/credit-cards", "https://www.examplebank.com/bank-accounts"]}'
 ```
 
-This will start scraping the provided URLs and save the extracted information in a JSON file.
-
-## Features
-
-1. **User Authentication and Authorization**: Secure login and logout functionality.
-2. **Data Visualization**: Interactive charts and graphs for data visualization.
-3. **Custom Alerts and Notifications**: Email notifications for high-limit credit cards and high-balance bank accounts.
-4. **API Integration**: RESTful API for integrating scraped data into other applications.
-5. **Machine Learning for Anomaly Detection**: Detect anomalies in credit
+This will start scraping the provided URLs and save the extracted information in a JSON 
