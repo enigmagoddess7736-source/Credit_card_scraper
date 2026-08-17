@@ -1,4 +1,10 @@
+# requirements.txt
 scrapy
 selenium
 webdriver-manager
 flask
+flask-login
+flask-mail
+pandas
+plotly
+joblib
