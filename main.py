@@ -1,19 +1,20 @@
 # Credit Card Scraper - Termux Compatible Version
 # Uses requests + BeautifulSoup instead of Scrapy/Selenium
-# Requires: pip install requests beautifulsoup4 flask flask-login flask-mail pandas plotly joblib
+# No heavy dependencies - uses native Python only
+# Requires: pip install requests beautifulsoup4 flask flask-login flask-mail joblib
 
 from flask import Flask, request, jsonify, render_template
 from flask_login import LoginManager, UserMixin, login_user, login_required, current_user, logout_user
 from flask_mail import Mail, Message
 from datetime import datetime
 import json
-import pandas as pd
-import plotly.express as px
 import joblib
 import os
 import requests
 from bs4 import BeautifulSoup
 import threading
+import csv
+from io import StringIO
 
 # List of URLs to scrape
 urls = [
@@ -97,6 +98,92 @@ class CreditCardScraper:
         print(f"Scraped {len(self.data)} items and saved to items.json")
         return self.data
 
+# Native Python data processing (no pandas needed)
+class DataProcessor:
+    @staticmethod
+    def load_data():
+        """Load data from JSON file"""
+        try:
+            with open('items.json', 'r') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
+
+    @staticmethod
+    def extract_numeric(value):
+        """Extract numeric value from string"""
+        if not value:
+            return 0
+        numeric_str = ''.join(ch for ch in str(value) if ch.isdigit() or ch == '.')
+        try:
+            return float(numeric_str) if numeric_str else 0
+        except ValueError:
+            return 0
+
+    @staticmethod
+    def generate_html_table(data):
+        """Generate HTML table from data without pandas"""
+        if not data:
+            return '<p>No data available</p>'
+        
+        html = '<table class="table table-striped"><thead><tr>'
+        
+        # Get column names from first row
+        if data:
+            for key in data[0].keys():
+                html += f'<th>{key}</th>'
+        html += '</tr></thead><tbody>'
+        
+        # Add data rows
+        for row in data:
+            html += '<tr>'
+            for value in row.values():
+                html += f'<td>{value}</td>'
+            html += '</tr>'
+        
+        html += '</tbody></table>'
+        return html
+
+    @staticmethod
+    def generate_simple_chart(data):
+        """Generate simple HTML chart without plotly"""
+        if not data:
+            return '<p>No data available</p>'
+        
+        # Create simple bar chart with HTML/CSS
+        credit_cards = [item for item in data if item.get('type') == 'credit_card']
+        
+        html = '''
+        <div style="width: 100%; height: 400px; border: 1px solid #ccc; padding: 20px;">
+            <h3>Credit Card Limits Distribution</h3>
+            <div style="display: flex; align-items: flex-end; gap: 10px; height: 300px;">
+        '''
+        
+        max_limit = 0
+        for item in credit_cards:
+            limit = DataProcessor.extract_numeric(item.get('limit', '0'))
+            if limit > max_limit:
+                max_limit = limit
+        
+        if max_limit == 0:
+            return '<p>No credit card data to visualize</p>'
+        
+        for idx, item in enumerate(credit_cards[:10]):  # Limit to 10 items
+            limit = DataProcessor.extract_numeric(item.get('limit', '0'))
+            height_percent = (limit / max_limit) * 100
+            cc_num = item.get('number', 'N/A')[-4:]  # Show last 4 digits
+            
+            html += f'''
+                <div style="display: flex; flex-direction: column; align-items: center;">
+                    <div style="width: 30px; height: {height_percent}%; background-color: #007bff; border-radius: 4px;"></div>
+                    <span style="font-size: 12px; margin-top: 5px;">****{cc_num}</span>
+                    <span style="font-size: 10px;">${limit:,.0f}</span>
+                </div>
+            '''
+        
+        html += '</div></div>'
+        return html
+
 # Flask app for interactive UI
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'your_secret_key')
@@ -160,7 +247,6 @@ def scrape():
     input_urls = data.get('urls', [])
     start_urls = input_urls if input_urls else urls
 
-    # Run scraper in background thread to avoid blocking
     def run_scraper():
         scraper = CreditCardScraper(start_urls=start_urls)
         scraper.run()
@@ -174,105 +260,85 @@ def scrape():
 @app.route('/data')
 @login_required
 def data():
-    try:
-        with open('items.json', 'r') as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        data = []
-    except json.JSONDecodeError:
-        data = []
-    return render_template('data.html', data=data)
+    """Display scraped data in HTML table"""
+    data_list = DataProcessor.load_data()
+    html_table = DataProcessor.generate_html_table(data_list)
+    return render_template('data.html', data=html_table)
+
+@app.route('/api/data')
+@login_required
+def api_data():
+    """Return data as JSON API"""
+    data_list = DataProcessor.load_data()
+    return jsonify(data_list)
 
 @app.route('/visualize')
 @login_required
 def visualize():
-    try:
-        with open('items.json', 'r') as f:
-            data = json.load(f)
-    except Exception:
-        data = []
-
-    if not data:
-        return render_template('visualize.html', error='No data available')
-
-    df = pd.DataFrame(data)
-    # Ensure numeric conversion where possible
-    if 'limit' in df.columns:
-        df['limit'] = pd.to_numeric(df['limit'].astype(str).str.replace('[^0-9.]', '', regex=True), errors='coerce')
+    """Display simple chart visualization"""
+    data_list = DataProcessor.load_data()
     
-    fig = px.scatter(
-        df, 
-        x='number' if 'number' in df.columns else df.index, 
-        y='limit' if 'limit' in df.columns else None, 
-        title='Credit Card Limits'
-    )
-    os.makedirs('static', exist_ok=True)
-    fig.write_html('static/visualization.html')
-    return render_template('visualize.html')
+    if not data_list:
+        chart = '<p>No data available. Run scraper first.</p>'
+    else:
+        chart = DataProcessor.generate_simple_chart(data_list)
+    
+    return render_template('visualize.html', chart=chart)
 
 @app.route('/alerts')
 @login_required
 def alerts():
-    try:
-        with open('items.json', 'r') as f:
-            data = json.load(f)
-    except Exception:
-        data = []
-
+    """Process high value alerts"""
+    data_list = DataProcessor.load_data()
+    
     high_limit_cc = []
     high_balance_bank = []
 
-    for item in data:
+    for item in data_list:
         try:
             if item.get('type') == 'credit_card':
-                limit = float(''.join(ch for ch in str(item.get('limit', '0')) if (ch.isdigit() or ch == '.')) or 0)
+                limit = DataProcessor.extract_numeric(item.get('limit', '0'))
                 if limit > 10000:
                     high_limit_cc.append(item)
+            
             if item.get('type') == 'bank_account':
-                balance = float(''.join(ch for ch in str(item.get('balance', '0')) if (ch.isdigit() or ch == '.')) or 0)
+                balance = DataProcessor.extract_numeric(item.get('balance', '0'))
                 if balance > 50000:
                     high_balance_bank.append(item)
         except Exception:
             continue
 
+    # Send email alerts
     for item in high_limit_cc:
         try:
-            msg = Message('High Limit Credit Card Alert', sender=app.config.get('MAIL_USERNAME'), recipients=[current_user.email])
-            msg.body = f'Credit Card Number: {item.get("number")}, Limit: {item.get("limit")} '
+            msg = Message('High Limit Credit Card Alert', 
+                         sender=app.config.get('MAIL_USERNAME'), 
+                         recipients=[current_user.email])
+            msg.body = f'Credit Card Number: {item.get("number")}, Limit: {item.get("limit")}'
             mail.send(msg)
         except Exception:
             continue
 
     for item in high_balance_bank:
         try:
-            msg = Message('High Balance Bank Account Alert', sender=app.config.get('MAIL_USERNAME'), recipients=[current_user.email])
-            msg.body = f'Account Number: {item.get("account_number")}, Balance: {item.get("balance")} '
+            msg = Message('High Balance Bank Account Alert', 
+                         sender=app.config.get('MAIL_USERNAME'), 
+                         recipients=[current_user.email])
+            msg.body = f'Account Number: {item.get("account_number")}, Balance: {item.get("balance")}'
             mail.send(msg)
         except Exception:
             continue
 
-    return jsonify({'message': 'Alerts processed'})
+    return jsonify({'message': f'Alerts processed: {len(high_limit_cc)} credit cards, {len(high_balance_bank)} bank accounts'})
 
 @app.route('/anomaly_detection')
 @login_required
 def anomaly_detection():
-    try:
-        with open('items.json', 'r') as f:
-            data = json.load(f)
-    except Exception:
-        data = []
-
-    if not data:
+    """Run anomaly detection on scraped data"""
+    data_list = DataProcessor.load_data()
+    
+    if not data_list:
         return render_template('anomaly_detection.html', data='No data available')
-
-    df = pd.DataFrame(data)
-
-    # Prepare numeric features safely
-    for col in ['limit', 'balance']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col].astype(str).str.replace('[^0-9.-]', '', regex=True), errors='coerce')
-        else:
-            df[col] = pd.NA
 
     model_path = 'anomaly_detection_model.pkl'
     if not os.path.exists(model_path):
@@ -280,19 +346,39 @@ def anomaly_detection():
 
     try:
         model = joblib.load(model_path)
-        features = []
-        if 'limit' in df.columns:
-            features.append('limit')
-        if 'balance' in df.columns:
-            features.append('balance')
-        if not features:
+        
+        # Extract features for model
+        features_data = []
+        for item in data_list:
+            feature_row = []
+            
+            if item.get('type') == 'credit_card':
+                limit = DataProcessor.extract_numeric(item.get('limit', '0'))
+                feature_row.append(limit)
+            
+            if item.get('type') == 'bank_account':
+                balance = DataProcessor.extract_numeric(item.get('balance', '0'))
+                feature_row.append(balance)
+            
+            if feature_row:
+                features_data.append(feature_row)
+        
+        if not features_data:
             return render_template('anomaly_detection.html', data='No numeric features available')
 
-        df['anomaly'] = model.predict(df[features].fillna(0))
-        df['anomaly'] = df['anomaly'].apply(lambda x: 'Anomaly' if int(x) == 1 else 'Normal')
-        return render_template('anomaly_detection.html', data=df.to_html(classes='table table-striped'))
+        # Run anomaly detection
+        predictions = model.predict(features_data)
+        
+        # Add predictions to data
+        for idx, item in enumerate(data_list):
+            if idx < len(predictions):
+                item['anomaly'] = 'Anomaly' if predictions[idx] == 1 else 'Normal'
+        
+        html_table = DataProcessor.generate_html_table(data_list)
+        return render_template('anomaly_detection.html', data=html_table)
+    
     except Exception as e:
-        return render_template('anomaly_detection.html', data=f'Error running model: {e}')
+        return render_template('anomaly_detection.html', data=f'Error running model: {str(e)}')
 
 if __name__ == '__main__':
     app.run(debug=True)
