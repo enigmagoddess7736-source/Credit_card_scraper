@@ -1,18 +1,7 @@
-# Directory structure for the project
-# credit_card_scraper/
-# ├── main.py
-# ├── requirements.txt
-# ├── README.md
-# └── venv/
+# Credit Card Scraper - Termux Compatible Version
+# Uses requests + BeautifulSoup instead of Scrapy/Selenium
+# Requires: pip install requests beautifulsoup4 flask flask-login flask-mail pandas plotly joblib
 
-# main.py
-import scrapy
-from scrapy.crawler import CrawlerProcess
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
 from flask import Flask, request, jsonify, render_template
 from flask_login import LoginManager, UserMixin, login_user, login_required, current_user, logout_user
 from flask_mail import Mail, Message
@@ -22,6 +11,9 @@ import pandas as pd
 import plotly.express as px
 import joblib
 import os
+import requests
+from bs4 import BeautifulSoup
+import threading
 
 # List of URLs to scrape
 urls = [
@@ -29,65 +21,81 @@ urls = [
     'https://www.examplebank.com/bank-accounts'
 ]
 
-# Selenium setup (created lazily to avoid heavy work at import time)
-chrome_options = Options()
-chrome_options.add_argument("--headless")
-chrome_options.add_argument("--disable-gpu")
-chrome_options.add_argument("--no-sandbox")
-chrome_options.add_argument("--disable-dev-shm-usage")
+# Scraper class using requests + BeautifulSoup
+class CreditCardScraper:
+    def __init__(self, start_urls=None):
+        self.start_urls = start_urls if start_urls else urls
+        self.data = []
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
 
-def create_webdriver():
-    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-
-class CreditCardSpider(scrapy.Spider):
-    name = 'credit_card_spider'
-
-    def __init__(self, start_urls=None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        if start_urls:
-            self.start_urls = start_urls
-        else:
-            self.start_urls = urls
-
-    def parse(self, response):
-        # Use Selenium to handle JavaScript-rendered content
-        driver = create_webdriver()
+    def scrape_url(self, url):
+        """Scrape a single URL and extract credit card or bank account info"""
         try:
-            driver.get(response.url)
-            # Wait for the page to load completely
-            driver.implicitly_wait(10)
-
+            response = requests.get(url, headers=self.headers, timeout=10)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
             # Extract credit card information
-            if 'credit-cards' in response.url:
-                for element in driver.find_elements(By.CSS_SELECTOR, 'div.credit-card-info'):
-                    cc_number = element.find_element(By.CSS_SELECTOR, 'span.cc-number').text
-                    cc_expiry = element.find_element(By.CSS_SELECTOR, 'span.cc-expiry').text
-                    cc_cvv = element.find_element(By.CSS_SELECTOR, 'span.cc-cvv').text
-                    cc_limit = element.find_element(By.CSS_SELECTOR, 'span.cc-limit').text
-                    yield {
-                        'type': 'credit_card',
-                        'number': cc_number,
-                        'expiry': cc_expiry,
-                        'cvv': cc_cvv,
-                        'limit': cc_limit
-                    }
-
+            if 'credit-cards' in url:
+                for element in soup.find_all('div', class_='credit-card-info'):
+                    try:
+                        cc_number = element.find('span', class_='cc-number')
+                        cc_expiry = element.find('span', class_='cc-expiry')
+                        cc_cvv = element.find('span', class_='cc-cvv')
+                        cc_limit = element.find('span', class_='cc-limit')
+                        
+                        if all([cc_number, cc_expiry, cc_cvv, cc_limit]):
+                            self.data.append({
+                                'type': 'credit_card',
+                                'number': cc_number.text.strip(),
+                                'expiry': cc_expiry.text.strip(),
+                                'cvv': cc_cvv.text.strip(),
+                                'limit': cc_limit.text.strip()
+                            })
+                    except Exception as e:
+                        print(f"Error parsing credit card: {e}")
+                        continue
+            
             # Extract bank account information
-            if 'bank-accounts' in response.url:
-                for element in driver.find_elements(By.CSS_SELECTOR, 'div.account-info'):
-                    account_number = element.find_element(By.CSS_SELECTOR, 'span.account-number').text
-                    routing_number = element.find_element(By.CSS_SELECTOR, 'span.routing-number').text
-                    balance = element.find_element(By.CSS_SELECTOR, 'span.balance').text
-                    account_holder = element.find_element(By.CSS_SELECTOR, 'span.account-holder').text
-                    yield {
-                        'type': 'bank_account',
-                        'account_number': account_number,
-                        'routing_number': routing_number,
-                        'balance': balance,
-                        'account_holder': account_holder
-                    }
-        finally:
-            driver.quit()
+            if 'bank-accounts' in url:
+                for element in soup.find_all('div', class_='account-info'):
+                    try:
+                        account_number = element.find('span', class_='account-number')
+                        routing_number = element.find('span', class_='routing-number')
+                        balance = element.find('span', class_='balance')
+                        account_holder = element.find('span', class_='account-holder')
+                        
+                        if all([account_number, routing_number, balance, account_holder]):
+                            self.data.append({
+                                'type': 'bank_account',
+                                'account_number': account_number.text.strip(),
+                                'routing_number': routing_number.text.strip(),
+                                'balance': balance.text.strip(),
+                                'account_holder': account_holder.text.strip()
+                            })
+                    except Exception as e:
+                        print(f"Error parsing bank account: {e}")
+                        continue
+        
+        except requests.exceptions.RequestException as e:
+            print(f"Error scraping {url}: {e}")
+            return
+
+    def run(self):
+        """Scrape all URLs and save to JSON"""
+        for url in self.start_urls:
+            print(f"Scraping {url}...")
+            self.scrape_url(url)
+        
+        # Save results to file
+        with open('items.json', 'w') as f:
+            json.dump(self.data, f, indent=2)
+        
+        print(f"Scraped {len(self.data)} items and saved to items.json")
+        return self.data
 
 # Flask app for interactive UI
 app = Flask(__name__)
@@ -147,19 +155,21 @@ def logout():
 @app.route('/scrape', methods=['POST'])
 @login_required
 def scrape():
+    """Scrape URLs in background thread"""
     data = request.get_json() or {}
     input_urls = data.get('urls', [])
-    # Fallback to default urls if none provided
     start_urls = input_urls if input_urls else urls
 
-    process = CrawlerProcess(settings={
-        "FEEDS": {
-            "items.json": {"format": "json", "overwrite": True},
-        },
-    })
-    process.crawl(CreditCardSpider, start_urls=start_urls)
-    process.start()
-    return jsonify({'message': 'Scraping started'})
+    # Run scraper in background thread to avoid blocking
+    def run_scraper():
+        scraper = CreditCardScraper(start_urls=start_urls)
+        scraper.run()
+
+    thread = threading.Thread(target=run_scraper)
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({'message': 'Scraping started in background'})
 
 @app.route('/data')
 @login_required
@@ -188,8 +198,14 @@ def visualize():
     df = pd.DataFrame(data)
     # Ensure numeric conversion where possible
     if 'limit' in df.columns:
-        df['limit'] = pd.to_numeric(df['limit'].str.replace('[^0-9.]', '', regex=True), errors='coerce')
-    fig = px.scatter(df, x='number' if 'number' in df.columns else df.index, y='limit' if 'limit' in df.columns else None, title='Credit Card Limits')
+        df['limit'] = pd.to_numeric(df['limit'].astype(str).str.replace('[^0-9.]', '', regex=True), errors='coerce')
+    
+    fig = px.scatter(
+        df, 
+        x='number' if 'number' in df.columns else df.index, 
+        y='limit' if 'limit' in df.columns else None, 
+        title='Credit Card Limits'
+    )
     os.makedirs('static', exist_ok=True)
     fig.write_html('static/visualization.html')
     return render_template('visualize.html')
@@ -280,19 +296,3 @@ def anomaly_detection():
 
 if __name__ == '__main__':
     app.run(debug=True)
-
-# requirements.txt
-# scrapy
-# selenium
-# webdriver-manager
-# flask
-# flask-login
-# flask-mail
-# pandas
-# plotly
-# joblib
-
-# README.md
-# Credit Card Scraper
-
-# This is a Python script to scrape credit card and bank account information from various websites using Scrapy, Selenium, and related tools.
